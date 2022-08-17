@@ -5,6 +5,7 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2013 Mozzhuhin Andrey
+ * Copyright (c) 2021, Joel
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -24,832 +25,461 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "struct.h"
-#include <ctype.h>
-#include <endian.h>
-#include <stdarg.h>
-#include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <errno.h>
 
-//
-// Private Definitions
-//
+#include "struct.h"
 
-/**
- * Calculate count of padding bytes needed to align field with given type
- */
-#define struct_field_padding(context, type)	(context->native_alignment ? \
-		(__alignof__(type) - (uintptr_t) context->offset % __alignof__(type)) % __alignof__(type) : 0)
-
-//
-// Private Types
-//
-
-/** Context of pack/unpack services */
-typedef struct _struct_context
-{
-	int byte_order;
-	int native_alignment;
-	int native_size;
-	size_t offset;
-	size_t repeat;
-} struct_context;
-
-/**
- * Definition of packer function for basic type
- * @param buffer Buffer for store value, must be not NULL and have enough space
- */
-typedef ssize_t (*struct_pack_basic)(void *buffer, struct_context *context, va_list *vl);
-
-/** Definition of unpacker function for basic type */
-typedef ssize_t (*struct_unpack_basic)(const void *buffer, struct_context *context, va_list *vl);
-
-/** Definition of function for basic type size calculation */
-typedef ssize_t (*struct_calcsize_basic)(struct_context *context);
-
-typedef struct _struct_format_field
-{
-	char format;
-	struct_pack_basic pack;
-	struct_unpack_basic unpack;
-	struct_calcsize_basic calcsize;
-} struct_format_field;
-
-/**
- * Float to 32-bit integer value conversation
- */
-typedef union _float32
-{
-	float		f;
-	uint32_t	i;
-} float32;
-
-/**
- * Double to 64-bit integer value conversation
- */
-typedef union _double64
-{
-	double		d;
-	uint64_t	i;
-} double64;
-
-//
-// Forward Declarations
-//
-
-static ssize_t struct_pack_pad(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_pad(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_pad(struct_context *context);
-
-static ssize_t struct_pack_byte(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_byte(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_byte(struct_context *context);
-
-static ssize_t struct_pack_bool(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_bool(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_bool(struct_context *context);
-
-static ssize_t struct_pack_short(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_short(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_short(struct_context *context);
-
-static ssize_t struct_pack_int(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_int(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_int(struct_context *context);
-
-static ssize_t struct_pack_quad(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_quad(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_quad(struct_context *context);
-
-static ssize_t struct_pack_float(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_float(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_float(struct_context *context);
-
-static ssize_t struct_pack_double(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_double(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_double(struct_context *context);
-
-static ssize_t struct_pack_str(void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_unpack_str(const void *buffer, struct_context *context, va_list *vl);
-static ssize_t struct_calcsize_str(struct_context *context);
-
-//
-// Private Variables
-//
-
-/** Format definition table */
-static const struct_format_field struct_format_fields[] = {
-		{ 'x', struct_pack_pad, struct_unpack_pad, struct_calcsize_pad },
-		{ 'c', struct_pack_byte, struct_unpack_byte, struct_calcsize_byte },
-		{ 'b', struct_pack_byte, struct_unpack_byte, struct_calcsize_byte },
-		{ 'B', struct_pack_byte, struct_unpack_byte, struct_calcsize_byte },
-		{ '?', struct_pack_bool, struct_unpack_bool, struct_calcsize_bool },
-		{ 'h', struct_pack_short, struct_unpack_short, struct_calcsize_short },
-		{ 'H', struct_pack_short, struct_unpack_short, struct_calcsize_short },
-		{ 'i', struct_pack_int, struct_unpack_int, struct_calcsize_int },
-		{ 'I', struct_pack_int, struct_unpack_int, struct_calcsize_int },
-		{ 'l', struct_pack_int, struct_unpack_int, struct_calcsize_int },
-		{ 'L', struct_pack_int, struct_unpack_int, struct_calcsize_int },
-		{ 'q', struct_pack_quad, struct_unpack_quad, struct_calcsize_quad },
-		{ 'Q', struct_pack_quad, struct_unpack_quad, struct_calcsize_quad },
-		{ 'f', struct_pack_float, struct_unpack_float, struct_calcsize_float },
-		{ 'd', struct_pack_double, struct_unpack_double, struct_calcsize_double },
-		{ 's', struct_pack_str, struct_unpack_str, struct_calcsize_str },
-		/* end of format table */
-		{ '\0', NULL, NULL, NULL }
+struct struct_context{
+    const char *format;
+    int byte_order;
+    int align;
+    char *buf;
+    uint32_t buf_limit;
+    uint32_t buf_offset;
 };
 
-//
-// Private Services
-//
+typedef ssize_t (*pack_func)(struct struct_context *ctx, va_list *va, int repeat);
+typedef ssize_t (*unpack_func)(struct struct_context *ctx, va_list *va, int repeat);
+struct struct_format_type{
+    pack_func pack;
+    unpack_func unpack;
+    size_t size;
+};
 
-/**
- * Load 16-bit value in system order from pointer
- * @param p Data source
- * @return 16-bit value from pointer
- */
-static inline uint16_t load_16(const void *p)
-{
-#if BYTE_ORDER == LITTLE_ENDIAN
-	return (*(uint8_t *) p) + (*(uint8_t *) (p + 1) << 8);
+static inline void parse_flag(struct struct_context *ctx){
+    char flag_char[2] = {0,0};
+    int freadn = 0;
+    if(1 == sscanf(ctx->format, "%1[{=|<|>|!|@}]%n", flag_char, &freadn)){
+        ctx->format += freadn;
+    }
+    switch(flag_char[0]){
+    case '<':
+        ctx->byte_order = LITTLE_ENDIAN;
+        break;
+    case '>':
+    case '!':
+        ctx->byte_order = BIG_ENDIAN;
+        break;
+    case '=':
+        ctx->byte_order = BYTE_ORDER;
+        break;
+    case '@':
+    default: //default flag
+        ctx->byte_order = BYTE_ORDER;
+        ctx->align = 1;
+        break;
+    }
+}
+
+static inline int format_has_next(struct struct_context *ctx){
+    return (int)(*(ctx->format));
+}
+
+static inline int parse_repeat(struct struct_context *ctx){
+    int repeat = 1, freadn = 0;
+    char repeat_str[11] = {0, };
+    if(1 == sscanf(ctx->format, "%10[0-9]%n", repeat_str, &freadn)){
+        repeat = atoi(repeat_str);
+        ctx->format += freadn;
+    }
+    return repeat;
+}
+
+static inline char parse_type(struct struct_context *ctx){
+    char type_char[2] = {0,0};
+    int freadn = 0;
+    if(1 == sscanf(ctx->format, "%1[{x|c|b|B|?|h|H|i|I|l|L|q|Q|f|d|s|p| }]%n", type_char, &freadn)){
+        ctx->format += freadn;
+    }
+    char type = type_char[0];
+    if('l' == type || 'L' == type){ //long is very special
+        if(ctx->align){ //'@' flag has been set 
+#ifdef __x86_64__
+            type = ('l' == type ? 'q' : 'Q'); //as int64_t or uint64_t
 #else
-	return (*(uint8_t *) (p + 1)) + (*(uint8_t *) p << 8);
+            type = ('l' == type ? 'i' : 'I'); //as int32_t or uint32_t
 #endif
+        }else{
+            type = ('l' == type ? 'i' : 'I'); //as int32_t or uint32_t
+        }
+    }
+    return type;
 }
 
-/**
- * Store 16-bit value to pointer in system order
- * @param p Data destination
- * @param v 16-bit value to store
- */
-static inline void stor_16(void *p, uint16_t v)
-{
-#if BYTE_ORDER == LITTLE_ENDIAN
-	*(uint8_t *) p = v & 0xff;
-	*(uint8_t *) (p + 1) = v >> 8;
-#else
-	*(uint8_t *) p = v >> 8;
-	*(uint8_t *) (p + 1) = v & 0xff;
-#endif
+#define CALC_ALIGN(align, offset) \
+    ({ \
+        (((offset) + (align) - 1) / (align)) * (align); \
+    })
+
+///////////////////////////////////////////////////////////////////////////////
+// swab number
+///////////////////////////////////////////////////////////////////////////////
+#define DEFINE_NUM_SWAB(T) \
+    static T swab_##T(T value){ \
+        union{ \
+            T v; char c[8]; \
+        } num1 = {.v = (value)}, num2; \
+        size_t len = sizeof(T); \
+        int i = 0, s = 0, e = len-1; \
+        for (; i < len; i++, s++, e--){ \
+            num2.c[s] = num1.c[e]; \
+        } \
+        return num2.v; \
+    }
+DEFINE_NUM_SWAB(uint16_t)
+DEFINE_NUM_SWAB(uint32_t)
+DEFINE_NUM_SWAB(uint64_t)
+DEFINE_NUM_SWAB(float)
+DEFINE_NUM_SWAB(double)
+
+///////////////////////////////////////////////////////////////////////////////
+// serialize
+///////////////////////////////////////////////////////////////////////////////
+enum struct_number_types{
+    UINT8, UINT16, UINT32, UINT64,
+    INT8, INT16, INT32, INT64,
+    FLOAT, DOUBLE,
+};
+
+static ssize_t pack_number(char *buf, int byte_order, int type, va_list *va) {
+    switch(type){
+    case INT8:
+    case UINT8:{
+        uint8_t i = (uint8_t)va_arg(*va, int); //type must be int!
+        memcpy(buf, &i, sizeof(uint8_t));
+        return sizeof(uint8_t);
+    }
+    case INT16:
+    case UINT16:{
+        uint16_t i = (uint16_t)va_arg(*va, int); //type must be int!
+        if(byte_order != BYTE_ORDER)
+            i = swab_uint16_t(i);
+        memcpy(buf, &i, sizeof(uint16_t));
+        return sizeof(uint16_t);
+    }
+    case INT32:
+    case UINT32:{
+        uint32_t i = va_arg(*va, uint32_t);
+        if(byte_order != BYTE_ORDER)
+            i = swab_uint32_t(i);
+        memcpy(buf, &i, sizeof(uint32_t));
+        return sizeof(uint32_t);
+    }
+    case INT64:
+    case UINT64:{
+        uint64_t i = va_arg(*va, uint64_t);
+        if(byte_order != BYTE_ORDER)
+            i = swab_uint64_t(i);
+        memcpy(buf, &i, sizeof(uint64_t));
+        return sizeof(uint64_t);
+    }
+    case FLOAT:{
+        float f = (float)va_arg(*va, double); //type must be double!
+        if(byte_order != BYTE_ORDER)
+            f = swab_float(f);
+        memcpy(buf, &f, sizeof(float));
+        return sizeof(float);
+    }
+    case DOUBLE:{
+        double d = va_arg(*va, double);
+        if(byte_order != BYTE_ORDER)
+            d = swab_double(d);
+        memcpy(buf, &d, sizeof(double));
+        return sizeof(double);
+    }
+    default:
+        return -1;
+    }
+}
+static ssize_t pack_number(char *buf, int byte_order, int type, va_list *va);
+#define DEFINE_NUM_PACK(T,t,a) \
+    static ssize_t pack_##T(struct struct_context *ctx, va_list *va, int repeat){ \
+        ssize_t offset = ctx->buf_offset, i = 0; \
+        if(ctx->align && 1 < (a)){ \
+            offset = CALC_ALIGN((a), offset); \
+        } \
+        for(; i < repeat; i++){ \
+            if(ctx->align && 1 < (a)){ \
+                offset = CALC_ALIGN((a), offset); \
+            } \
+            if((offset + (a)) > ctx->buf_limit){ \
+                return -1; \
+            } \
+            ssize_t size = pack_number(ctx->buf + offset, ctx->byte_order, (t), va); \
+            if(0 >= size){ \
+                return -1; \
+            } \
+            offset += size; \
+        } \
+        ssize_t packed_size = offset - ctx->buf_offset; \
+        ctx->buf_offset = offset; \
+        return packed_size; \
+    }
+DEFINE_NUM_PACK(uint8, UINT8, 1)
+DEFINE_NUM_PACK(uint16, UINT16, 2)
+DEFINE_NUM_PACK(uint32, UINT32, 4)
+DEFINE_NUM_PACK(uint64, UINT64, 8)
+DEFINE_NUM_PACK(int8, INT8, 1)
+DEFINE_NUM_PACK(int16, INT16, 2)
+DEFINE_NUM_PACK(int32, INT32, 4)
+DEFINE_NUM_PACK(int64, INT64, 8)
+DEFINE_NUM_PACK(float, FLOAT, 4)
+DEFINE_NUM_PACK(double, DOUBLE, 8)
+
+static ssize_t unpack_number(char *buf, int byte_order, int type, va_list *va){
+    switch(type){
+    case INT8:
+    case UINT8:{
+        uint8_t i = *(uint8_t*)(buf);
+        *va_arg(*va, uint8_t*) = i;
+        return sizeof(uint8_t);
+    }
+    case INT16:
+    case UINT16:{
+        uint16_t i = *(uint16_t*)(buf);
+        if(byte_order != BYTE_ORDER)
+            i = swab_uint16_t(i);
+        *va_arg(*va, uint16_t*) = i;
+        return sizeof(uint16_t);
+    }
+    case INT32:
+    case UINT32:{
+        uint32_t i = *(uint32_t*)(buf);
+        if(byte_order != BYTE_ORDER)
+            i = swab_uint32_t(i);
+        *va_arg(*va, uint32_t*) = i;
+        return sizeof(uint32_t);
+    }
+    case INT64:
+    case UINT64:{
+        uint64_t i = *(uint64_t*)(buf);
+        if(byte_order != BYTE_ORDER)
+            i = swab_uint64_t(i);
+        *va_arg(*va, uint64_t*) = i;
+        return sizeof(uint64_t);
+    }
+    case FLOAT:{
+        float f = *(float*)(buf);
+        if(byte_order != BYTE_ORDER)
+            f = swab_float(f);
+        *va_arg(*va, float*) = f;
+        return sizeof(float);
+    }
+    case DOUBLE:{
+        double d = *(double*)(buf);
+        if(byte_order != BYTE_ORDER)
+            d = swab_double(d);
+        *va_arg(*va, double*) = d;
+        return sizeof(double);
+    }
+    default:
+        return -1;
+    }
+}
+#define DEFINE_NUM_UNPACK(T,t,a) \
+    static ssize_t unpack_##T(struct struct_context *ctx, va_list *va, int repeat){ \
+        ssize_t offset = ctx->buf_offset, i = 0; \
+        if(ctx->align && 1 < (a)){ \
+            offset = CALC_ALIGN((a), offset); \
+        } \
+        for(; i < repeat; i++){ \
+            if(ctx->align && 1 < (a)){ \
+                offset = CALC_ALIGN((a), offset); \
+            } \
+            if((offset + (a)) > ctx->buf_limit){ \
+                return -1; \
+            } \
+            ssize_t szie = unpack_number(ctx->buf + offset, ctx->byte_order, (t), va); \
+            if(0 >= szie){ \
+                return -1; \
+            } \
+            offset += szie; \
+        } \
+        ssize_t unpacked_szie = offset - ctx->buf_offset; \
+        ctx->buf_offset = offset; \
+        return unpacked_szie; \
+    }
+DEFINE_NUM_UNPACK(uint8, UINT8, 1)
+DEFINE_NUM_UNPACK(uint16, UINT16, 2)
+DEFINE_NUM_UNPACK(uint32, UINT32, 4)
+DEFINE_NUM_UNPACK(uint64, UINT64, 8)
+DEFINE_NUM_UNPACK(int8, INT8, 1)
+DEFINE_NUM_UNPACK(int16, INT16, 2)
+DEFINE_NUM_UNPACK(int32, INT32, 4)
+DEFINE_NUM_UNPACK(int64, INT64, 8)
+DEFINE_NUM_UNPACK(float, FLOAT, 4)
+DEFINE_NUM_UNPACK(double, DOUBLE, 8)
+
+static ssize_t pack_pad(struct struct_context *ctx, va_list *va, int repeat){
+    size_t packed_size = sizeof(char) * repeat;
+    if((ctx->buf_offset + packed_size) > ctx->buf_limit){
+        return -1;
+    }
+    memset(ctx->buf + ctx->buf_offset, 0, packed_size);
+    ctx->buf_offset += packed_size;
+    return sizeof(char) * repeat;
 }
 
-/**
- * Swap bytes in 16-bit value
- * @param v Original 16-bit value
- * @return Swapped 16-bit value
- */
-static inline uint16_t swab_16(uint16_t v)
-{
-	return (v >> 8) | ((v & 0xff) << 8);
+static ssize_t unpack_pad(struct struct_context *ctx, va_list *va, int repeat){
+    size_t unpacked_size = sizeof(char) * repeat;
+    if((ctx->buf_offset + unpacked_size) > ctx->buf_limit){
+        return -1;
+    }
+    ctx->buf_offset += unpacked_size;
+    return (ssize_t)unpacked_size;
 }
 
-/**
- * Load 32-bit value in system order from pointer
- * @param p Data source
- * @return 32-bit value from pointer
- */
-static inline uint32_t load_32(const void *p)
-{
-	const uint8_t *p8 = p;
-#if BYTE_ORDER == LITTLE_ENDIAN
-	return p8[0] + (p8[1] << 8) + (p8[2] << 16) + (p8[3] << 24);
-#else
-	return p8[3] + (p8[2] << 8) + (p8[1] << 16) + (p8[0] << 24);
-#endif
+static ssize_t pack_str(struct struct_context *ctx, va_list *va, int len) {
+    size_t packed_size = sizeof(char) * len;
+    if((ctx->buf_offset + packed_size) > ctx->buf_limit){
+        return -1;
+    }
+    memcpy(ctx->buf + ctx->buf_offset, va_arg(*va, char *), packed_size);
+    ctx->buf_offset += packed_size;
+    return (ssize_t)packed_size;
 }
 
-/**
- * Store 32-bit value to pointer in system order
- * @param p Data destination
- * @param v 32-bit value to store
- */
-static inline void stor_32(void *p, uint32_t v)
-{
-	uint8_t *p8 = p;
-#if BYTE_ORDER == LITTLE_ENDIAN
-	p8[0] = v & 0xff;
-	p8[1] = (v >> 8) & 0xff;
-	p8[2] = (v >> 16) & 0xff;
-	p8[3] = v >> 24;
-#else
-	p8[3] = v & 0xff;
-	p8[2] = (v >> 8) & 0xff;
-	p8[1] = (v >> 16) & 0xff;
-	p8[0] = v >> 24;
-#endif
+static ssize_t unpack_str(struct struct_context *ctx, va_list *va, int len) {
+    size_t unpacked_size = sizeof(char) * len;
+    if((ctx->buf_offset + unpacked_size) > ctx->buf_limit){
+        return -1;
+    }
+    memcpy(va_arg(*va, char *), ctx->buf + ctx->buf_offset, unpacked_size);
+    ctx->buf_offset += unpacked_size;
+    return (ssize_t)unpacked_size;
 }
 
-/**
- * Swap bytes in 32-bit value
- * @param v Original 32-bit value
- * @return Swapped 32-bit value
- */
-static inline uint32_t swab_32(uint32_t v)
-{
-	return (v >> 24) | ((v & 0x00ff0000) >> 8) | ((v & 0x0000ff00) << 8) | ((v & 0xff) << 24);
+///////////////////////////////////////////////////////////////////////////////
+// struct API
+///////////////////////////////////////////////////////////////////////////////
+const struct struct_format_type format_type_table[255] = {
+    ['x'] = { pack_pad, unpack_pad, 1 },
+    ['c'] = { pack_uint8, unpack_uint8, 1 },
+    ['b'] = { pack_int8, unpack_int8, 1 },
+    ['B'] = { pack_uint8, unpack_uint8, 1 },
+    ['?'] = { pack_uint8, unpack_uint8, 1 },
+    ['h'] = { pack_int16, unpack_int16, 2 },
+    ['H'] = { pack_uint16, unpack_uint16, 2 },
+    ['i'] = { pack_int32, unpack_int32, 4 },
+    ['I'] = { pack_uint32, unpack_uint32, 4 },
+    ['l'] = { NULL, NULL, 0 }, //q or i
+    ['L'] = { NULL, NULL, 0 }, //Q or I
+    ['q'] = { pack_int64, unpack_int64, 8 },
+    ['Q'] = { pack_uint64, unpack_uint64, 8 },
+    ['f'] = { pack_float, unpack_float, 4 },
+    ['d'] = { pack_double, unpack_double, 8 },
+    ['s'] = { pack_str, unpack_str, 1 },
+    ['p'] = { pack_str, unpack_str, 1 },
+    [' '] = { NULL, NULL, 0 }, //do nothing
+    //['P'] = { NULL, NULL, NULL }
+};
+
+ssize_t struct_pack(void *buf, size_t buf_limit, const char *format, ...){
+    va_list va;
+    va_start(va, format);
+    if(NULL == buf || 0 >= buf_limit || NULL == format || 0 >= strlen(format)){
+        goto err;
+    }
+    memset(buf, 0, buf_limit);
+    struct struct_context ctx = {
+        .format = format, .byte_order = BYTE_ORDER, .align = 0,
+        .buf = buf, .buf_limit = buf_limit, .buf_offset = 0
+    };
+    parse_flag(&ctx);
+    while(format_has_next(&ctx)){
+        int repeat = parse_repeat(&ctx);
+        if(0 > repeat){
+            goto err;
+        }
+        char type = parse_type(&ctx);
+        if('\0' == type){
+            goto err;
+        }
+        struct struct_format_type format_type = format_type_table[(int)type];
+        if(format_type.pack && 0 >= format_type.pack(&ctx, &va, repeat)){
+            goto err;
+        }
+    }
+    va_end(va);
+    return ctx.buf_offset;
+
+err:
+    va_end(va);
+    return -1;
 }
 
-/**
- * Load 64-bit value in system order from pointer
- * @param p Data source
- * @return 64-bit value from pointer
- */
-static inline uint64_t load_64(const void *p)
-{
-	const uint8_t *p8 = p;
-	uint64_t result = 0;
-	size_t i;
+ssize_t struct_unpack(const void *buf, size_t buf_limit, const char *format, ...){
+    va_list va;
+    va_start(va, format);
+    if(NULL == buf || 0 >= buf_limit || NULL == format || 0 >= strlen(format)){
+        goto err;
+    }
+    struct struct_context ctx = {
+        .format = format, .byte_order = BYTE_ORDER, .align = 0,
+        .buf = (char *)buf, .buf_limit = buf_limit, .buf_offset = 0
+    };
+    parse_flag(&ctx);
+    while(format_has_next(&ctx)){
+        int repeat = parse_repeat(&ctx);
+        if(0 > repeat){
+            goto err;
+        }
+        char type = parse_type(&ctx);
+        if('\0' == type){
+            goto err;
+        }
+        struct struct_format_type format_type = format_type_table[(int)type];
+        if(format_type.pack && 0 >= format_type.unpack(&ctx, &va, repeat)){
+            goto err;
+        }
+    }
+    va_end(va);
+    return ctx.buf_offset;
 
-	for (i = 0; i < sizeof(uint64_t); i++)
-	{
-		result <<= 8;
-#if BYTE_ORDER == LITTLE_ENDIAN
-		result |= p8[sizeof(uint64_t) - i - 1];
-#else
-		result |= p8[i];
-#endif
-	}
-	return result;
+err:
+    va_end(va);
+    return -1;
 }
 
-/**
- * Store 64-bit value to pointer in system order
- * @param p Data destination
- * @param v 64-bit value to store
- */
-static inline void stor_64(void *p, uint64_t v)
-{
-	uint8_t *p8 = p;
-	size_t i;
-
-	for (i = 0; i < sizeof(v); i++)
-	{
-#if BYTE_ORDER == LITTLE_ENDIAN
-		p8[i] = v & 0xff;
-#else
-		p8[sizeof(v) - i - 1] = v & 0xff;
-#endif
-		v >>= 8;
-	}
-}
-
-/**
- * Swap bytes in 64-bit value
- * @param v Original 64-bit value
- * @return Swapped 64-bit value
- */
-static inline uint64_t swab_64(uint64_t v)
-{
-	uint64_t result = 0;
-	size_t i;
-
-	for (i = 0; i < sizeof(v); i++)
-	{
-		result <<= 8;
-		result |= (v & 0xff);
-		v >>= 8;
-	}
-	return result;
-}
-
-static ssize_t struct_pack_pad(void *buffer, struct_context *context, va_list *vl)
-{
-	memset(buffer, 0, context->repeat);
-	return context->repeat * sizeof(uint8_t);
-}
-
-static ssize_t struct_unpack_pad(const void *buffer, struct_context *context, va_list *vl)
-{
-	return context->repeat * sizeof(uint8_t);
-}
-
-static ssize_t struct_calcsize_pad(struct_context *context)
-{
-	return context->repeat * sizeof(uint8_t);
-}
-
-static ssize_t struct_pack_byte(void *buffer, struct_context *context, va_list *vl)
-{
-	uint8_t *p = buffer;
-	size_t i;
-
-	for (i = 0; i < context->repeat; i++)
-		*p++ = va_arg(*vl, int);
-
-	return context->repeat * sizeof(uint8_t);
-}
-
-static ssize_t struct_unpack_byte(const void *buffer, struct_context *context, va_list *vl)
-{
-	const int8_t *p = buffer;
-	size_t i;
-
-	for (i = 0; i < context->repeat; i++)
-		*va_arg(*vl, int8_t*) = *p++;
-
-	return context->repeat * sizeof(int8_t);
-}
-
-static ssize_t struct_calcsize_byte(struct_context *context)
-{
-	return context->repeat * sizeof(int8_t);
-}
-
-static ssize_t struct_pack_bool(void *buffer, struct_context *context, va_list *vl)
-{
-	int8_t *p = buffer;
-	size_t i;
-
-	for (i = 0; i < context->repeat; i++)
-		*p++ = va_arg(*vl, int) != 0;
-
-	return context->repeat * sizeof(int8_t);
-}
-
-static ssize_t struct_unpack_bool(const void *buffer, struct_context *context, va_list *vl)
-{
-	const int8_t *p = buffer;
-	size_t i;
-
-	for (i = 0; i < context->repeat; i++)
-		*va_arg(*vl, int8_t*) = (*p++ != 0);
-
-	return context->repeat * sizeof(int8_t);
-}
-
-static ssize_t struct_calcsize_bool(struct_context *context)
-{
-	return context->repeat * sizeof(uint8_t);
-}
-
-static ssize_t struct_pack_short(void *buffer, struct_context *context, va_list *vl)
-{
-	int16_t *p;
-	size_t i;
-	size_t padding = struct_field_padding(context, int16_t);
-
-	memset(buffer, 0, padding);
-	p = buffer + padding;
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		int16_t v = va_arg(*vl, int);
-		if (context->byte_order != BYTE_ORDER)
-			v = swab_16(v);
-		stor_16(p, v);
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_unpack_short(const void *buffer, struct_context *context, va_list *vl)
-{
-	const int16_t *p;
-	size_t i;
-
-	p = buffer + struct_field_padding(context, int16_t);
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		int16_t v = load_16(p);
-		if (context->byte_order != BYTE_ORDER)
-			v = swab_16(v);
-		*va_arg(*vl, int16_t*) = v;
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_calcsize_short(struct_context *context)
-{
-	return struct_field_padding(context, int16_t) + context->repeat * sizeof(int16_t);
-}
-
-static ssize_t struct_pack_int(void *buffer, struct_context *context, va_list *vl)
-{
-	uint32_t *p;
-	size_t i;
-	size_t padding = struct_field_padding(context, uint32_t);
-
-	memset(buffer, 0, padding);
-	p = buffer + padding;
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		uint32_t v = va_arg(*vl, uint32_t);
-		if (context->byte_order != BYTE_ORDER)
-			v = swab_32(v);
-		stor_32(p, v);
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_unpack_int(const void *buffer, struct_context *context, va_list *vl)
-{
-	const uint32_t *p;
-	size_t i;
-
-	p = buffer + struct_field_padding(context, uint32_t);
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		uint32_t v = load_32(p);
-		if (context->byte_order != BYTE_ORDER)
-			v = swab_32(v);
-		*va_arg(*vl, uint32_t*) = v;
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_calcsize_int(struct_context *context)
-{
-	return struct_field_padding(context, uint32_t) + context->repeat * sizeof(uint32_t);
-}
-
-static ssize_t struct_pack_quad(void *buffer, struct_context *context, va_list *vl)
-{
-	uint64_t *p;
-	size_t i;
-	size_t padding = struct_field_padding(context, uint64_t);
-
-	memset(buffer, 0, padding);
-	p = buffer + padding;
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		uint64_t v = va_arg(*vl, uint64_t);
-		if (context->byte_order != BYTE_ORDER)
-			v = swab_64(v);
-		stor_64(p, v);
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_unpack_quad(const void *buffer, struct_context *context, va_list *vl)
-{
-	const uint64_t *p;
-	size_t i;
-
-	p = buffer + struct_field_padding(context, uint64_t);
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		uint64_t v = load_64(p);
-		if (context->byte_order != BYTE_ORDER)
-			v = swab_64(v);
-		*va_arg(*vl, uint64_t*) = v;
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_calcsize_quad(struct_context *context)
-{
-	return struct_field_padding(context, uint64_t) + context->repeat * sizeof(uint64_t);
-}
-
-static ssize_t struct_pack_float(void *buffer, struct_context *context, va_list *vl)
-{
-	float *p;
-	size_t i;
-	size_t padding = struct_field_padding(context, float);
-
-	memset(buffer, 0, padding);
-	p = buffer + padding;
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		float32 v;
-		v.f = va_arg(*vl, double);
-		if (context->byte_order != BYTE_ORDER)
-			v.i = swab_32(v.i);
-		stor_32(p, v.i);
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_unpack_float(const void *buffer, struct_context *context, va_list *vl)
-{
-	const float *p;
-	size_t i;
-
-	p = buffer + struct_field_padding(context, float);
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		float32 v;
-		v.i = load_32(p);
-		if (context->byte_order != BYTE_ORDER)
-			v.i = swab_32(v.i);
-		*va_arg(*vl, float*) = v.f;
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_calcsize_float(struct_context *context)
-{
-	return struct_field_padding(context, float) + context->repeat * sizeof(float);
-}
-
-static ssize_t struct_pack_double(void *buffer, struct_context *context, va_list *vl)
-{
-	double *p = buffer;
-	size_t i;
-	size_t padding = struct_field_padding(context, double);
-
-	memset(buffer, 0, padding);
-	p = buffer + padding;
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		double64 v;
-		v.d = va_arg(*vl, double);
-		if (context->byte_order != BYTE_ORDER)
-			v.i = swab_64(v.i);
-		stor_64(p, v.i);
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_unpack_double(const void *buffer, struct_context *context, va_list *vl)
-{
-	const double *p;
-	size_t i;
-	size_t padding = struct_field_padding(context, double);
-
-	p = buffer + padding;
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		double64 v;
-		v.i = load_64(p);
-		if (context->byte_order != BYTE_ORDER)
-			v.i = swab_64(v.i);
-		*va_arg(*vl, double*) = v.d;
-		p++;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_calcsize_double(struct_context *context)
-{
-	return struct_field_padding(context, double) + context->repeat * sizeof(double);
-}
-
-static ssize_t struct_pack_str(void *buffer, struct_context *context, va_list *vl)
-{
-	char *p = buffer;
-	const char *str = va_arg(*vl, const char *);
-	size_t i;
-
-	for (i = 0; i < context->repeat; i++)
-	{
-		if (str != NULL && *str != '\0')
-			*p++ = *str++;
-		else
-			*p++ = 0;
-	}
-
-	return (void *) p - buffer;
-}
-
-static ssize_t struct_unpack_str(const void *buffer, struct_context *context, va_list *vl)
-{
-	char *str = va_arg(*vl, char *);
-	size_t str_size = va_arg(*vl, size_t);
-
-	strncpy(str, buffer, context->repeat < str_size ? context->repeat : str_size);
-	str[str_size - 1] = '\0';
-
-	return context->repeat * sizeof(char);
-}
-
-static ssize_t struct_calcsize_str(struct_context *context)
-{
-	return context->repeat * sizeof(char);
-}
-
-/**
- * Parse next field format
- * @param format Format string
- * @param context Struct parsing context
- * @param item Returning pointer to item or NULL on error
- * @return Pointer to next character for parsing in format string
- */
-const char* struct_parse_field(const char *format, struct_context *context, const struct_format_field **field)
-{
-	const char *c = format;
-
-	// whitespace characters between formats are ignored
-	while (isspace(*c)) c++;
-
-	// read integral repeat count
-	if (isdigit(*c))
-	{
-		context->repeat = 0;
-		do {
-			context->repeat = context->repeat * 10 + *c - '0';
-			c++;
-		} while (isdigit(*c));
-	}
-	else
-	{
-		context->repeat = 1;
-	}
-	// find packer for current basic type
-	*field = &struct_format_fields[0];
-	while ((*field)->format != '\0' && (*field)->format != *c)
-		(*field)++;
-	if ((*field)->format != '\0')
-		c++;
-	else
-		*field = NULL;
-
-	return c;
-}
-
-const char* struct_parse_prefix(const char *format, struct_context *context)
-{
-	const char *c = format;
-
-	switch (*c)
-	{
-	case '=':
-		c++;
-		context->byte_order = __BYTE_ORDER;
-		context->native_size = 0;
-		context->native_alignment = 0;
-		break;
-
-	case '<':
-		c++;
-		context->byte_order = __LITTLE_ENDIAN;
-		context->native_size = 0;
-		context->native_alignment = 0;
-		break;
-
-	case '>':
-	case '!':
-		c++;
-		context->byte_order = __BIG_ENDIAN;
-		context->native_size = 0;
-		context->native_alignment = 0;
-		break;
-
-	case '@':
-		c++;
-		/* fall through */
-	default:
-		context->byte_order = __BYTE_ORDER;
-		context->native_size = 1;
-		context->native_alignment = 1;
-		break;
-	}
-
-	return c;
-}
-
-//
-// Public Services
-//
-
-ssize_t struct_pack(void *buffer, size_t size, const char *format, ...)
-{
-	const char *c, *next;
-	struct_context context;
-	const struct_format_field *field;
-	ssize_t field_size;
-	uint8_t *p;
-	va_list vl;
-
-	if (buffer == NULL || format == NULL)
-		return -1;
-
-	memset(&context, 0, sizeof(context));
-	c = struct_parse_prefix(format, &context);
-	p = buffer;
-	va_start(vl, format);
-
-	while (*c != '\0')
-	{
-		next = struct_parse_field(c, &context, &field);
-		if (field == NULL)
-			break;
-
-		field_size = field->calcsize(&context);
-		if ((uint8_t *) buffer + size - p < field_size)
-			break;
-
-		if (field->pack(p, &context, &vl) != field_size)
-			break;
-
-		p += field_size;
-		context.offset += field_size;
-		c = next;
-	}
-
-	va_end(vl);
-
-	// not parse whole format string
-	if (*c != '\0')
-		return -1;
-
-	return p - (uint8_t *) buffer;
-}
-
-ssize_t struct_unpack(const void *buffer, size_t size, const char *format, ...)
-{
-	const char *c, *next;
-	struct_context context;
-	const struct_format_field *field;
-	ssize_t field_size;
-	const uint8_t *p;
-	va_list vl;
-
-	if (buffer == NULL || format == NULL)
-		return -1;
-
-	memset(&context, 0, sizeof(context));
-	c = struct_parse_prefix(format, &context);
-	p = buffer;
-	va_start(vl, format);
-
-	while (*c != '\0')
-	{
-		next = struct_parse_field(c, &context, &field);
-		if (field == NULL)
-			break;
-
-		field_size = field->calcsize(&context);
-		if ((const uint8_t *) buffer + size - p < field_size)
-			break;
-
-		if (field->unpack(p, &context, &vl) != field_size)
-			break;
-
-		p += field_size;
-		context.offset += field_size;
-		c = next;
-	}
-
-	va_end(vl);
-
-	// not parse whole format string
-	if (*c != '\0')
-		return -1;
-
-	return p - (uint8_t *) buffer;
-}
-
-ssize_t struct_calcsize(const char *format)
-{
-	const char *c, *next;
-	struct_context context;
-	const struct_format_field *field;
-	ssize_t field_size;
-	ssize_t result;
-
-	if (format == NULL)
-		return -1;
-
-	memset(&context, 0, sizeof(context));
-	c = struct_parse_prefix(format, &context);
-	result = 0;
-
-	while (*c != '\0')
-	{
-		next = struct_parse_field(c, &context, &field);
-		if (field == NULL)
-			break;
-
-		field_size = field->calcsize(&context);
-		if (field_size <= 0)
-			break;
-
-		result += field_size;
-		context.offset += field_size;
-		c = next;
-	}
-
-	// not parse whole format string
-	if (*c != '\0')
-		return -1;
-
-	return result;
+ssize_t struct_calcsize(const char *format){
+    if(NULL == format || 0 >= strlen(format)){
+        goto err;
+    }
+    struct struct_context ctx = {.format = format, .align = 0};
+    parse_flag(&ctx);
+    ssize_t calcsize = 0;
+    while(format_has_next(&ctx)){
+        int repeat = parse_repeat(&ctx);
+        if(0 > repeat){
+            goto err;
+        }
+        char type = parse_type(&ctx);
+        if('\0' == type){
+            goto err;
+        }
+        struct struct_format_type format_type = format_type_table[(int)type];
+        if(1 < format_type.size){ //format won't change
+            if(ctx.align){
+                calcsize = CALC_ALIGN(format_type.size, calcsize);
+            }
+            int i = 0;
+            for(; i < repeat; i++){
+                if(ctx.align){
+                    calcsize = CALC_ALIGN(format_type.size, calcsize);
+                }
+                calcsize += format_type.size;
+            }
+        }else{
+            calcsize += format_type.size * repeat;
+        }
+    }
+    return calcsize;
+
+err:
+    return -1;
 }
