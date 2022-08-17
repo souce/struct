@@ -5,6 +5,7 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2013 Mozzhuhin Andrey
+ * Copyright (c) 2021, Joel
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -197,14 +198,24 @@ static void test_struct_example_1_1(void)
 	uint8_t buf[100];
 	ssize_t size;
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-	uint8_t result[] = { 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00 };
+	#ifdef __x86_64__
+		uint8_t result[] = {	0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 
+								0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	#else
+		uint8_t result[] = { 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00 };
+	#endif
 #else
-	uint8_t result[] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03 };
+	#ifdef __x86_64__
+		uint8_t result[] = {	0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 
+								0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 };
+	#else
+		uint8_t result[] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03 };
+	#endif
 #endif
 
 	size = struct_pack(buf, sizeof(buf), "hhl", 1, 2, 3);
 
-	printf("Example 1.1 test: ");
+	printf("Example 1.1 test:");
 	if (size == sizeof(result) &&
 			memcmp(buf, result, sizeof(result)) == 0)
 		printf("PASS\n");
@@ -218,9 +229,19 @@ static void test_struct_example_1_2(void)
 	long c;
 	ssize_t size;
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-	uint8_t buf[] = { 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00 };
+	#ifdef __x86_64__
+		uint8_t buf[] = {	0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 
+							0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	#else
+		uint8_t buf[] = { 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00 };
+	#endif
 #else
-	uint8_t buf[] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03 };
+	#ifdef __x86_64__
+		uint8_t buf[] = { 	0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 
+							0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 };
+	#else
+		uint8_t buf[] = { 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03 };
+	#endif
 #endif
 
 	size = struct_unpack(buf, sizeof(buf), "hhl", &a, &b, &c);
@@ -240,6 +261,37 @@ static void test_struct_example_1_3(void)
 	size = struct_calcsize("hhl");
 
 	printf("Example 1.3 test: ");
+	#ifdef __x86_64__
+	if (size == 16)
+		printf("PASS\n");
+	#else
+	if (size == 8)
+		printf("PASS\n");
+	#endif
+	else
+		printf("FAIL\n");
+}
+
+static void test_struct_example_1_4(void)
+{
+	ssize_t size;
+
+	size = struct_calcsize(">hhl");
+
+	printf("Example 1.4 test: ");
+	if (size == 8)
+		printf("PASS\n");
+	else
+		printf("FAIL\n");
+}
+
+static void test_struct_example_1_5(void)
+{
+	ssize_t size;
+
+	size = struct_calcsize("<hhl");
+
+	printf("Example 1.5 test: ");
 	if (size == 8)
 		printf("PASS\n");
 	else
@@ -258,12 +310,12 @@ static void test_struct_example_2(void)
 	ssize_t size;
 
 	size = struct_unpack(record, sizeof(record), "<10sHHb",
-			&student.name[0], sizeof(student.name),
+			&student.name[0],
 			&student.serialnum, &student.school, &student.gradelevel);
 
 	printf("Example 2 test: ");
 	if (size == sizeof(record) - 1 &&
-			strncmp("raymond   ", student.name, sizeof(student.name)) == 0 &&
+			strncmp("raymond   ", student.name, 10) == 0 &&
 			student.serialnum == 4658 &&
 			student.school == 264 &&
 			student.gradelevel == 8)
@@ -331,14 +383,29 @@ static void test_struct_example_4(void)
 	uint8_t buf[100];
 	ssize_t size;
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-	uint8_t result[] = { 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
+	#ifdef __x86_64__
+		uint8_t result[] = {	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+								0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+								0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+	#else
+		uint8_t result[] = {	0x01, 0x00, 0x00, 0x00,
+								0x02, 0x00, 0x00, 0x00, 
+								0x03, 0x00, 0x00, 0x00 };
+	#endif
 #else
-	uint8_t result[] = { 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00 };
+	#ifdef __x86_64__
+		uint8_t result[] = {	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 
+								0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 
+								0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03 };
+	#else
+		uint8_t result[] = {	0x00, 0x00, 0x00, 0x01,
+								0x00, 0x00, 0x00, 0x02, 
+								0x00, 0x00, 0x00, 0x03 };
+	#endif
 #endif
 
 	size = struct_pack(buf, sizeof(buf), "llh0l", 1, 2, 3);
-
-	printf("Example 4 test: ");
+	printf("Example 4 test:");
 	if (size == sizeof(result) &&
 			memcmp(buf, result, sizeof(result)) == 0)
 		printf("PASS\n");
@@ -478,6 +545,8 @@ int main(int argc, char *argv[])
 	test_struct_example_1_1();
 	test_struct_example_1_2();
 	test_struct_example_1_3();
+	test_struct_example_1_4();
+	test_struct_example_1_5();
 	test_struct_example_2();
 	test_struct_example_3_1();
 	test_struct_example_3_2();
