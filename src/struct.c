@@ -52,23 +52,22 @@ struct struct_format_type{
 };
 
 static inline void parse_flag(struct struct_context *ctx){
-    char flag_char[2] = {0,0};
-    int freadn = 0;
-    if(1 == sscanf(ctx->format, "%1[{=|<|>|!|@}]%n", flag_char, &freadn)){
-        ctx->format += freadn;
-    }
-    switch(flag_char[0]){
+    switch(ctx->format[0]){
     case '<':
         ctx->byte_order = LITTLE_ENDIAN;
+        ctx->format += 1;
         break;
     case '>':
     case '!':
         ctx->byte_order = BIG_ENDIAN;
+        ctx->format += 1;
         break;
     case '=':
         ctx->byte_order = BYTE_ORDER;
+        ctx->format += 1;
         break;
     case '@':
+        ctx->format += 1;
     default: //default flag
         ctx->byte_order = BYTE_ORDER;
         ctx->align = 1;
@@ -81,22 +80,21 @@ static inline int format_has_next(struct struct_context *ctx){
 }
 
 static inline int parse_repeat(struct struct_context *ctx){
-    int repeat = 1, freadn = 0;
-    char repeat_str[11] = {0, };
-    if(1 == sscanf(ctx->format, "%10[0-9]%n", repeat_str, &freadn)){
-        repeat = atoi(repeat_str);
-        ctx->format += freadn;
+    int repeat = 1;
+    char *c = ctx->format;
+    if(isdigit(*c)){
+        repeat = 0;
+        do{
+            repeat = repeat * 10 + *c - '0';
+            c++;
+        }while(isdigit(*c));
     }
+    ctx->format = c;
     return repeat;
 }
 
 static inline char parse_type(struct struct_context *ctx){
-    char type_char[2] = {0,0};
-    int freadn = 0;
-    if(1 == sscanf(ctx->format, "%1[{x|c|b|B|?|h|H|i|I|l|L|q|Q|f|d|s|p| }]%n", type_char, &freadn)){
-        ctx->format += freadn;
-    }
-    char type = type_char[0];
+    char type = ctx->format[0];
     if('l' == type || 'L' == type){ //long is very special
         if(ctx->align){ //'@' flag has been set 
 #ifdef __x86_64__
@@ -108,6 +106,7 @@ static inline char parse_type(struct struct_context *ctx){
             type = ('l' == type ? 'i' : 'I'); //as int32_t or uint32_t
         }
     }
+    ctx->format += 1;
     return type;
 }
 
@@ -369,7 +368,6 @@ const struct struct_format_type format_type_table[255] = {
     ['d'] = { pack_double, unpack_double, 8 },
     ['s'] = { pack_str, unpack_str, 1 },
     ['p'] = { pack_str, unpack_str, 1 },
-    [' '] = { NULL, NULL, 0 }, //do nothing
     //['P'] = { NULL, NULL, NULL }
 };
 
@@ -391,11 +389,14 @@ ssize_t struct_pack(void *buf, size_t buf_limit, const char *format, ...){
             goto err;
         }
         char type = parse_type(&ctx);
-        if('\0' == type){
-            goto err;
+        if(' ' == type){
+            continue;
         }
         struct struct_format_type format_type = format_type_table[(int)type];
-        if(format_type.pack && 0 > format_type.pack(&ctx, &va, repeat)){
+        if(!format_type.pack){
+            goto err;
+        }
+        if(0 > format_type.pack(&ctx, &va, repeat)){
             goto err;
         }
     }
@@ -424,11 +425,14 @@ ssize_t struct_unpack(const void *buf, size_t buf_limit, const char *format, ...
             goto err;
         }
         char type = parse_type(&ctx);
-        if('\0' == type){
-            goto err;
+        if(' ' == type){
+            continue;
         }
         struct struct_format_type format_type = format_type_table[(int)type];
-        if(format_type.pack && 0 > format_type.unpack(&ctx, &va, repeat)){
+        if(!format_type.pack){
+            goto err;
+        }
+        if(0 > format_type.unpack(&ctx, &va, repeat)){
             goto err;
         }
     }
@@ -453,14 +457,14 @@ ssize_t struct_calcsize(const char *format){
             goto err;
         }
         char type = parse_type(&ctx);
-        if('\0' == type){
-            goto err;
+        if(' ' == type){
+            continue;
         }
         struct struct_format_type format_type = format_type_table[(int)type];
         if(!format_type.pack){
             goto err;
         }
-        if(1 < format_type.size){ //format won't change
+        if(1 < format_type.size){
             if(ctx.align){
                 calcsize = CALC_ALIGN(format_type.size, calcsize);
             }
