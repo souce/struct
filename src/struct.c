@@ -196,7 +196,6 @@ static ssize_t pack_number(char *buf, int byte_order, int type, va_list *va) {
         return -1;
     }
 }
-static ssize_t pack_number(char *buf, int byte_order, int type, va_list *va);
 #define DEFINE_NUM_PACK(T,t,a) \
     static ssize_t pack_##T(struct struct_context *ctx, va_list *va, int repeat){ \
         ssize_t offset = ctx->buf_offset, i = 0; \
@@ -204,9 +203,6 @@ static ssize_t pack_number(char *buf, int byte_order, int type, va_list *va);
             offset = CALC_ALIGN((a), offset); \
         } \
         for(; i < repeat; i++){ \
-            if(ctx->align && 1 < (a)){ \
-                offset = CALC_ALIGN((a), offset); \
-            } \
             if((offset + (a)) > ctx->buf_limit){ \
                 return -1; \
             } \
@@ -288,9 +284,6 @@ static ssize_t unpack_number(char *buf, int byte_order, int type, va_list *va){
             offset = CALC_ALIGN((a), offset); \
         } \
         for(; i < repeat; i++){ \
-            if(ctx->align && 1 < (a)){ \
-                offset = CALC_ALIGN((a), offset); \
-            } \
             if((offset + (a)) > ctx->buf_limit){ \
                 return -1; \
             } \
@@ -358,6 +351,7 @@ static ssize_t unpack_str(struct struct_context *ctx, va_list *va, int len) {
 // struct API
 ///////////////////////////////////////////////////////////////////////////////
 const struct struct_format_type format_type_table[255] = {
+    [0 ... 254] = { NULL, NULL, 0 },
     ['x'] = { pack_pad, unpack_pad, 1 },
     ['c'] = { pack_uint8, unpack_uint8, 1 },
     ['b'] = { pack_int8, unpack_int8, 1 },
@@ -401,7 +395,7 @@ ssize_t struct_pack(void *buf, size_t buf_limit, const char *format, ...){
             goto err;
         }
         struct struct_format_type format_type = format_type_table[(int)type];
-        if(format_type.pack && 0 >= format_type.pack(&ctx, &va, repeat)){
+        if(format_type.pack && 0 > format_type.pack(&ctx, &va, repeat)){
             goto err;
         }
     }
@@ -434,7 +428,7 @@ ssize_t struct_unpack(const void *buf, size_t buf_limit, const char *format, ...
             goto err;
         }
         struct struct_format_type format_type = format_type_table[(int)type];
-        if(format_type.pack && 0 >= format_type.unpack(&ctx, &va, repeat)){
+        if(format_type.pack && 0 > format_type.unpack(&ctx, &va, repeat)){
             goto err;
         }
     }
@@ -463,15 +457,15 @@ ssize_t struct_calcsize(const char *format){
             goto err;
         }
         struct struct_format_type format_type = format_type_table[(int)type];
+        if(!format_type.pack){
+            goto err;
+        }
         if(1 < format_type.size){ //format won't change
             if(ctx.align){
                 calcsize = CALC_ALIGN(format_type.size, calcsize);
             }
             int i = 0;
             for(; i < repeat; i++){
-                if(ctx.align){
-                    calcsize = CALC_ALIGN(format_type.size, calcsize);
-                }
                 calcsize += format_type.size;
             }
         }else{
