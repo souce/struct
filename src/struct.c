@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdarg.h>
-#include <errno.h>
+#include <ctype.h>
 
 #include "struct.h"
 
@@ -81,7 +81,7 @@ static inline int format_has_next(struct struct_context *ctx){
 
 static inline int parse_repeat(struct struct_context *ctx){
     int repeat = 1;
-    char *c = ctx->format;
+    const char *c = ctx->format;
     if(isdigit(*c)){
         repeat = 0;
         do{
